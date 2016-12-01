@@ -2,7 +2,7 @@
 ## Description
 Provides analysis tools to sonificate EEG signal.
 
-Consists of python class able to read offline data (txt, edf, [more to come]) or read online data from Emotiv Epoc device and pure data patch for generating sounds. After preprocessing and computing statistical measures of the provided signal, sends indices via OSC protocol to pure data realtime. 
+Consists of python class able to read offline data (txt, edf, [more to come]) or read online data from Emotiv Epoc device and pure data patch for generating sounds. After preprocessing and computing statistical measures of the provided signal, sends indices via OSC protocol to pure data for real-time analysis. 
 
 At this point following preprocessing techniques are available:
 * transformation to average reference
