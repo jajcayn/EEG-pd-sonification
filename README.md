@@ -16,7 +16,7 @@ The patch for generating sounds (in pure data) is very primitive at this moment.
 ### Python
 * numpy - `pip install numpy`
 * pyOSC - `pip install pyOSC`
-* keypy - `pip install keypy`
+* keypy - `pip install keypy` -- throws error on import - need to edit source and rewrite all `from scipy import nanmean` to `from numpy import nanmean`
 * emokit - `pip install emokit`
 * mne - for reading offline data in *.edf format - `pip install mne`
 * scipy - if detrening data before filtering - `pip install scipy`
