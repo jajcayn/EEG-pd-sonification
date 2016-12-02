@@ -37,7 +37,7 @@ class eeg_to_osc(object):
     so 1-4 and [str] is keyword for different data parameter (see above)
     """
 
-    def __init__(self, source = "online", serial_number = None, input_file = None, sampling_rate = 128, channel_list = None, buffer_size = None):
+    def __init__(self, source = "online", serial_number = None, input_file = None, sampling_rate = 128, channel_list = None, buffer_size = None, dump_online_file = False):
         """
         source:
             online - emotiv kit -- serial number
@@ -73,6 +73,13 @@ class eeg_to_osc(object):
 
             # full channel list
             self.channel_list = self.left_channels + self.right_channels
+
+            if dump_online_file:
+                self.dump_online_file = True
+                self.online_data_to_write = dict(zip(self.channel_list, [[] for i in range(len(self.channel_list))]))
+            else:
+                self.dump_online_file = False
+
 
         if self.source == 'offline':
             if input_file is None:
@@ -422,6 +429,9 @@ class eeg_to_osc(object):
         Stops OSC server.
         """
 
+        if self.dump_online_file:
+            to_write = np.array([self.online_data_to_write[ch] for ch in self.channel_list]).T
+            np.savetxt("emotiv_raw_data_%s.txt" % str(time.time()), to_write, fmt = "%.6f")
         self.osc_server.close()
         print("Waiting for OSC server thread to finish...")
         self.osc_thread.join()
@@ -479,6 +489,9 @@ class eeg_to_osc(object):
         try:
             while True:
                 online_data, battery = self.online_data_queue.get()
+                if self.dump_online_file:
+                    for ch in online_data:    
+                        self.online_data_to_write[ch].append(online_data[ch])
                 # to 2d array for basic preprocessing
                 self.raw_data = np.array([online_data[ch] for ch in self.channel_list]).T
                 self._average_ref()
