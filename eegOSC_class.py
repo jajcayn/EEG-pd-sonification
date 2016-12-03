@@ -102,6 +102,12 @@ class eeg_to_osc(object):
                     self.raw_data = raw.to_data_frame().as_matrix()
                     self.channel_list = raw.ch_names
                     self.sampling_rate = int(raw.info['sfreq'])
+                    self.frontal = ['FP1-F7', 'FP2-F8']
+                    self.temporal_right = ['F8-T8', 'T8-P8']
+                    self.temporal_left = ['F7-T7', 'T7-P7']
+                    self.parietal_occipital = ['P7-O1', 'P8-O2']
+                    self.right = ['FP2-F4', 'F4-C4', 'C4-P4', 'P4-O2', 'FP2-F8', 'F8-T8', 'T8-P8', 'P8-O2']
+                    self.left = ['FP1-F3', 'F3-C3', 'C3-P3', 'P3-O1', 'FP1-F7', 'F7-T7', 'T7-P7', 'P7-O1']
                     del raw
 
         self.osc_client_setup = False
@@ -128,16 +134,33 @@ class eeg_to_osc(object):
         
         ## AVERAGE OF FRONTAL, TEMPORAL AND PARIETO-OCCIPITAL CHANNELS
         # frontal - ch1
-        self.send_data['ch1'] = np.mean(np.array(list(self.dict_data[k] for k in self.frontal)), axis = 0)
+        # self.send_data['ch1'] = np.mean(np.array(list(self.dict_data[k] for k in self.frontal)), axis = 0)
+        # left up to 20Hz
+        to_filter = np.array(list(self.dict_data[k] for k in self.left)).T
+        self.filter_data(cutoff = [1., 20.], overwrite = False, ts = to_filter)
+        self.send_data['ch1'] = np.mean(self.filt_data, axis = 1)
         
         # temporal right - ch2
-        self.send_data['ch2'] = np.mean(np.array(list(self.dict_data[k] for k in self.temporal_right)), axis = 0)
+        # self.send_data['ch2'] = np.mean(np.array(list(self.dict_data[k] for k in self.temporal_right)), axis = 0)
+        # right up to 20Hz
+        to_filter = np.array(list(self.dict_data[k] for k in self.right)).T
+        self.filter_data(cutoff = [1., 20.], overwrite = False, ts = to_filter)
+        self.send_data['ch2'] = np.mean(self.filt_data, axis = 1)
 
         # parietal + occipital - ch3
-        self.send_data['ch3'] = np.mean(np.array(list(self.dict_data[k] for k in self.parietal_occipital)), axis = 0)
+        # self.send_data['ch3'] = np.mean(np.array(list(self.dict_data[k] for k in self.parietal_occipital)), axis = 0)
+        # left 20-40Hz
+        to_filter = np.array(list(self.dict_data[k] for k in self.left)).T
+        self.filter_data(cutoff = [20., 40.], overwrite = False, ts = to_filter)
+        self.send_data['ch3'] = np.mean(self.filt_data, axis = 1)
+
 
         # temporal left - ch4
-        self.send_data['ch4'] = np.mean(np.array(list(self.dict_data[k] for k in self.temporal_left)), axis = 0)
+        # self.send_data['ch4'] = np.mean(np.array(list(self.dict_data[k] for k in self.temporal_left)), axis = 0)
+        # right 20-40Hz
+        to_filter = np.array(list(self.dict_data[k] for k in self.right)).T
+        self.filter_data(cutoff = [20., 40.], overwrite = False, ts = to_filter)
+        self.send_data['ch4'] = np.mean(self.filt_data, axis = 1)
 
 
     def _average_ref(self):
@@ -149,7 +172,7 @@ class eeg_to_osc(object):
         self.raw_data = self.raw_data - computed_mean[:, np.newaxis]
 
 
-    def filter_data(self, cutoff = [1., 40.], detrend = False, overwrite = True):
+    def filter_data(self, cutoff = [1., 40.], detrend = False, overwrite = True, ts = None):
         """
         Filters data with box filter.
         Detrend keyword whether to use linear detrending.
@@ -157,13 +180,21 @@ class eeg_to_osc(object):
         TAKEN FROM KEYPY -- https://github.com/keyinst/keypy
         """
 
-        time_frame = self.raw_data.shape[0]
-
-        x_all_channels = np.zeros(self.raw_data.shape, dtype = self.raw_data.dtype)
+        if ts is None:
+            x_all_channels = np.zeros(self.raw_data.shape, dtype = self.raw_data.dtype)
+            time_frame = self.raw_data.shape[0]
+        else:
+            x_all_channels = np.zeros(ts.shape, dtype = ts.dtype)
+            time_frame = ts.shape[0]
         frequency_bins = np.fft.fftfreq(time_frame, 1./self.sampling_rate)
 
-        for ch in range(self.raw_data.shape[1]):
-            x = self.raw_data[:,ch]
+        ch_num = self.raw_data.shape[1] if ts is None else ts.shape[1]
+
+        for ch in range(ch_num):
+            if ts is None:
+                x = self.raw_data[:,ch]
+            else:
+                x = ts[:, ch]
     
             if detrend:
                 import scipy.signal as ss
@@ -429,8 +460,9 @@ class eeg_to_osc(object):
         Stops OSC server.
         """
 
-        if self.dump_online_file:
+        if self.source == 'online' and self.dump_online_file:
             to_write = np.array([self.online_data_to_write[ch] for ch in self.channel_list]).T
+            print(to_write.shape)
             np.savetxt("emotiv_raw_data_%s.txt" % str(time.time()), to_write, fmt = "%.6f")
         self.osc_server.close()
         print("Waiting for OSC server thread to finish...")
@@ -462,7 +494,8 @@ class eeg_to_osc(object):
                 if packet is not None:
                     for ch in self.channel_list:
                         quality = packet.sensors[ch]['quality']
-                        online_data[ch].append(packet.sensors[ch]['value'])
+                        data = packet.sensors[ch]['value']
+                        online_data[ch].append((data * 0.51) / 1000.) # in mV
                     counter += 1
                     if counter >= self.buffer_size:
                         ratio = self.sampling_rate // self.buffer_size
@@ -491,7 +524,8 @@ class eeg_to_osc(object):
                 online_data, battery = self.online_data_queue.get()
                 if self.dump_online_file:
                     for ch in online_data:    
-                        self.online_data_to_write[ch].append(online_data[ch])
+                        self.online_data_to_write[ch] += online_data[ch]
+
                 # to 2d array for basic preprocessing
                 self.raw_data = np.array([online_data[ch] for ch in self.channel_list]).T
                 self._average_ref()
