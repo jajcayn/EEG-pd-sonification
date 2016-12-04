@@ -46,7 +46,7 @@ class eeg_to_osc(object):
 
         self.source = source
         
-        if source not in ['online', 'offline']:
+        if source not in ['online', 'offline', 'osc']:
             raise Exception("Unknown source. Use 'online' or 'offline'.")
         
         if self.source == 'online':
@@ -81,7 +81,7 @@ class eeg_to_osc(object):
                 self.dump_online_file = False
 
 
-        if self.source == 'offline':
+        elif self.source == 'offline':
             if input_file is None:
                 raise Exception("For offline data the input file name must be provided.")
             else:
@@ -110,6 +110,11 @@ class eeg_to_osc(object):
                     self.left = ['FP1-F3', 'F3-C3', 'C3-P3', 'P3-O1', 'FP1-F7', 'F7-T7', 'T7-P7', 'P7-O1']
                     del raw
 
+        elif self.source == 'osc':
+            self.channel_list = ['ch1', 'ch2', 'ch3', 'ch4']
+            self.osc_data = dict(zip(self.channel_list, [[] for i in range(len(self.channel_list))]))
+            self.sampling_rate = None
+
         self.osc_client_setup = False
         self.osc_server_setup = False
 
@@ -137,21 +142,21 @@ class eeg_to_osc(object):
         # self.send_data['ch1'] = np.mean(np.array(list(self.dict_data[k] for k in self.frontal)), axis = 0)
         # left up to 20Hz
         to_filter = np.array(list(self.dict_data[k] for k in self.left)).T
-        self.filter_data(cutoff = [1., 20.], overwrite = False, ts = to_filter)
+        self.filter_data(cutoff = [1., 16.], overwrite = False, ts = to_filter)
         self.send_data['ch1'] = np.mean(self.filt_data, axis = 1)
         
         # temporal right - ch2
         # self.send_data['ch2'] = np.mean(np.array(list(self.dict_data[k] for k in self.temporal_right)), axis = 0)
         # right up to 20Hz
         to_filter = np.array(list(self.dict_data[k] for k in self.right)).T
-        self.filter_data(cutoff = [1., 20.], overwrite = False, ts = to_filter)
+        self.filter_data(cutoff = [1., 16.], overwrite = False, ts = to_filter)
         self.send_data['ch2'] = np.mean(self.filt_data, axis = 1)
 
         # parietal + occipital - ch3
         # self.send_data['ch3'] = np.mean(np.array(list(self.dict_data[k] for k in self.parietal_occipital)), axis = 0)
         # left 20-40Hz
         to_filter = np.array(list(self.dict_data[k] for k in self.left)).T
-        self.filter_data(cutoff = [20., 40.], overwrite = False, ts = to_filter)
+        self.filter_data(cutoff = [16., 40.], overwrite = False, ts = to_filter)
         self.send_data['ch3'] = np.mean(self.filt_data, axis = 1)
 
 
@@ -159,7 +164,7 @@ class eeg_to_osc(object):
         # self.send_data['ch4'] = np.mean(np.array(list(self.dict_data[k] for k in self.temporal_left)), axis = 0)
         # right 20-40Hz
         to_filter = np.array(list(self.dict_data[k] for k in self.right)).T
-        self.filter_data(cutoff = [20., 40.], overwrite = False, ts = to_filter)
+        self.filter_data(cutoff = [16., 40.], overwrite = False, ts = to_filter)
         self.send_data['ch4'] = np.mean(self.filt_data, axis = 1)
 
 
@@ -427,9 +432,11 @@ class eeg_to_osc(object):
             address = '127.0.0.1'
         self.osc_server = OSC.OSCServer((address, port))
         self.osc_server.addDefaultHandlers()
+        for ch in self.channel_list:
+            self.osc_server.addMsgHandler('/%s' % ch, self._osc_server_handler)
         # TODO add handlers
 
-        self.osc_thread = threading.Thread( target = self.osc_server.serve_forever )
+        self.osc_thread = threading.Thread(target = self.osc_server.serve_forever)
         self.osc_thread.setDaemon(True)
         self.osc_server_setup = True
 
@@ -439,7 +446,8 @@ class eeg_to_osc(object):
         Handler for incoming OSC data.
         """
 
-        pass
+        ch = addr[1:]
+        self.osc_data[ch].append(data)
 
 
     def _osc_msg(self, address, msg):
@@ -464,14 +472,16 @@ class eeg_to_osc(object):
             to_write = np.array([self.online_data_to_write[ch] for ch in self.channel_list]).T
             print(to_write.shape)
             np.savetxt("emotiv_raw_data_%s.txt" % str(time.time()), to_write, fmt = "%.6f")
-        self.osc_server.close()
-        print("Waiting for OSC server thread to finish...")
-        self.osc_thread.join()
+        if self.source == 'osc':
+            self.osc_server.close()
+            print("Waiting for OSC server thread to finish...")
+            self.osc_thread.join()
+            self.osc_data_thread.join()
         if self.source == 'online':
             # self.headset.stop()
             self.eeg_reader_thread.join()
             self.eeg_process_thread.join()
-        print("Done")
+        print("Done.")
 
 
     def _thread_reading_online(self):
@@ -554,6 +564,40 @@ class eeg_to_osc(object):
             self.stop()
 
 
+    def _thread_process_osc(self):
+        """
+        Helper function for processing osc data.
+        To be used as a thread.
+        """
+
+        ticker_start = time.time()
+        time.sleep(2)
+        try:
+            while True:
+                # every second
+                if (time.time() - ticker_start) % 1 < 1e-4:
+                    buffer_data = self.osc_data
+                    self.osc_data = dict(zip(self.channel_list, [[] for i in range(len(self.channel_list))]))
+                    for i in range(1,5):
+                        ch = 'ch%d' % i
+                        self._osc_msg(address = '/%s/spec_c' % (ch), 
+                            msg = self.spectral_centroid(ts = np.array(buffer_data[ch]), N = len(buffer_data[ch])))
+                        self._osc_msg(address = '/%s/hj_act' % (ch), 
+                            msg = self.hjorth_activity(ts = np.array(buffer_data[ch]), N = len(buffer_data[ch])))
+                        self._osc_msg(address = '/%s/hj_mob' % (ch), 
+                            msg = self.hjorth_mobility(ts = np.array(buffer_data[ch]), N = len(buffer_data[ch])))
+                        self._osc_msg(address = '/%s/hj_com' % (ch), 
+                            msg = self.hjorth_complexity(ts = np.array(buffer_data[ch]), N = len(buffer_data[ch])))
+                    s = "...getting OSC - %dHz..." % len(buffer_data['ch1'])
+                    print(s, end = '')
+                    sys.stdout.flush()
+                    print((b'\x08' * len(s)).decode(), end = '')
+                
+        except KeyboardInterrupt:
+            print("stopping...")
+            self.stop()
+
+
     def run(self):
         """
         Main loop.
@@ -567,12 +611,17 @@ class eeg_to_osc(object):
             print("Preparing offline data")
             self._average_ref()
             self.filter_data()
-        print("Starting OSC client and server...")
-        self.setup_osc_server()
+        print("Starting OSC...")
+        if self.source == 'osc':
+            self.setup_osc_server(address = '192.168.1.8', port = 9017)
+            if self.osc_server_setup:
+                self.osc_thread.start()
+                print("OSC server up and running...")
+            else:
+                raise Exception("Something went wrong with the OSC protocol.")
         self.setup_osc_client()
-        if self.osc_server_setup and self.osc_client_setup:
-            self.osc_thread.start()
-            print("OSC up and running...")
+        if self.osc_client_setup:
+            print("OSC client up and running...")
         else:
             raise Exception("Something went wrong with the OSC protocol.")
         
@@ -584,14 +633,17 @@ class eeg_to_osc(object):
             self.eeg_process_thread = mp.Process(target = self._thread_process_online)
             self.eeg_process_thread.start()
 
-        # time.sleep(3)
-        if self.source == 'offline':
-            sleep_time = self.sampling_rate / self.buffer_size
-            idx = 0
+        elif self.source == 'osc':
+            # create process for processing data
+            self.osc_data_thread = mp.Process(target = self._thread_process_osc)
+            self.osc_data_thread.start()
         
         # main loop for offline data
         # loop for online data is handled in the threads
-        if self.source == "offline":
+        elif self.source == "offline":
+
+            sleep_time = self.sampling_rate / self.buffer_size
+            idx = 0
 
             self.prepare_ts_to_send()
             
